@@ -1070,3 +1070,19 @@ and artifact names are the same as pre-v1.0.
 
 Changes in next
 ---------------
+
+### Execution of privileged commands
+
+When operations require higher privileges than those available to the build user,
+the following helper functions shall be used:
+
+**run_privileged**: Run a command as root while preserving the environment.
+
+**run_privileged_heredoc**: Execute commands provided via stdin in a root shell.
+
+**run_in_chroot**: Run a command within a chroot environment. The first argument
+specifies the rootfs path.
+
+Using these helpers instead of direct `sudo` invocations centralizes platform-specific
+privileged execution logic in `base.bbclass`. Direct use of `sudo` is discouraged
+in downstream layers.
