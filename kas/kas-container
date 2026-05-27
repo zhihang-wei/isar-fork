@@ -27,10 +27,10 @@
 
 set -e
 
-KAS_CONTAINER_SCRIPT_VERSION="5.2"
+KAS_CONTAINER_SCRIPT_VERSION="5.999"
 KAS_IMAGE_VERSION_DEFAULT="${KAS_CONTAINER_SCRIPT_VERSION}"
 KAS_CONTAINER_IMAGE_DISTRO_DEFAULT=""
-KAS_CONTAINER_IMAGE_PATH_DEFAULT="ghcr.io/siemens/kas"
+KAS_CONTAINER_IMAGE_PATH_DEFAULT="ghcr.io/zhihang-wei/kas-fork/kas"
 KAS_CONTAINER_IMAGE_NAME_DEFAULT="kas"
 KAS_CONTAINER_SELF_NAME="$(basename "$0")"
 
@@ -49,6 +49,7 @@ usage()
 	printf "%b" "\nPositional arguments:\n"
 	printf "%b" "build\t\t\tCheck out repositories and build target.\n"
 	printf "%b" "checkout\t\tCheck out repositories but do not build.\n"
+	printf "%b" "diff\t\t\tCompare two kas configurations.\n"
 	printf "%b" "dump\t\t\tCheck out repositories and write flat version\n"
 	printf "%b" "    \t\t\tof config to stdout.\n"
 	printf "%b" "lock\t\t\tCreate and update kas project lockfiles\n"
@@ -67,6 +68,8 @@ usage()
 	printf "%b" "\nOptional arguments:\n"
 	printf "%b" "--isar\t\t\tUse kas-isar container to build Isar image. To force\n"
 	printf "%b" "      \t\t\tthe use of run0 over sudo, set KAS_SUDO_CMD=run0.\n"
+	printf "%b" "--isar-privileged\tRun the isar build in privileged mode\n"
+	printf "%b" "--isar-rootless\t\tRun the isar build in rootless mode\n"
 	printf "%b" "--with-loop-dev		Pass a loop device to the " \
 		    "container. Only required if\n"
 	printf "%b" "\t\t\tloop-mounting is used by recipes.\n"
@@ -159,12 +162,41 @@ enable_isar_mode()
 		export PATH="${PATH}:/usr/sbin"
 	elif [ "${KAS_DOCKER_ROOTLESS}" = "1" ]; then
 		prepare_sudo_cmd
-		export DOCKER_HOST="${DOCKER_HOST:-unix:///var/run/docker.sock}"
-		debug "kas-isar does not support rootless docker. Using system docker"
+		DOCKER_HOST_DEFAULT="$(docker context inspect default --format '{{.Endpoints.docker.Host}}')"
+		export DOCKER_HOST="${DOCKER_HOST:-$DOCKER_HOST_DEFAULT}"
+		debug "kas-isar does not support rootless docker. Using system docker in $DOCKER_HOST"
 		# force use of well-known system docker socket
 		KAS_CONTAINER_COMMAND="${_KAS_SUDO_CMD} ${KAS_CONTAINER_COMMAND}"
 		KAS_DOCKER_ROOTLESS=0
 	fi
+}
+
+enable_isar_rootless_mode()
+{
+       if [ -n "${ISAR_ROOTLESS_MODE}" ]; then
+               return
+       fi
+       ISAR_ROOTLESS_MODE=1
+       KAS_CONTAINER_IMAGE_NAME_DEFAULT="kas-isar"
+       KAS_RUNTIME_ARGS="${KAS_RUNTIME_ARGS} -e KAS_BLOCK_SUDO=1"
+
+       # Use --privileged to pass the ambient capabilities into the container.
+       # When calling from the user session (podman or docker-rootless), this
+       # is fundamentally different from the system docker run --privileged
+       if [ "${KAS_CONTAINER_ENGINE}" = "podman" ]; then
+               KAS_RUNTIME_ARGS="${KAS_RUNTIME_ARGS} --userns=keep-id --privileged"
+       elif [ "${KAS_DOCKER_ROOTLESS}" = "1" ]; then
+               KAS_ISAR_ARGS="--privileged"
+       else
+               # we don't need --privileged, but we need to run with SYS_ADMIN
+               # to be able to unshare.
+               KAS_ISAR_ARGS=" \
+                       --security-opt seccomp=unconfined \
+                       --security-opt apparmor=unconfined \
+                       --security-opt systempaths=unconfined \
+                       --cap-add=SYS_ADMIN \
+               "
+       fi
 }
 
 enable_oe_mode()
@@ -292,12 +324,15 @@ trap kas_container_cleanup EXIT INT TERM
 
 set_container_image_var()
 {
+	# if the image is explicitly set, use that
+	if [ -n "${KAS_CONTAINER_IMAGE}" ]; then
+		return
+	fi
 	KAS_IMAGE_VERSION="${KAS_IMAGE_VERSION:-${KAS_IMAGE_VERSION_DEFAULT}}"
 	KAS_CONTAINER_IMAGE_DISTRO="${KAS_CONTAINER_IMAGE_DISTRO:-${KAS_CONTAINER_IMAGE_DISTRO_DEFAULT}}"
 	KAS_CONTAINER_IMAGE_NAME="${KAS_CONTAINER_IMAGE_NAME:-${KAS_CONTAINER_IMAGE_NAME_DEFAULT}}"
 	KAS_CONTAINER_IMAGE_PATH="${KAS_CONTAINER_IMAGE_PATH:-${KAS_CONTAINER_IMAGE_PATH_DEFAULT}}"
-	KAS_CONTAINER_IMAGE_DEFAULT="${KAS_CONTAINER_IMAGE_PATH}/${KAS_CONTAINER_IMAGE_NAME}:${KAS_IMAGE_VERSION}"
-	KAS_CONTAINER_IMAGE="${KAS_CONTAINER_IMAGE:-${KAS_CONTAINER_IMAGE_DEFAULT}}"
+	KAS_CONTAINER_IMAGE="${KAS_CONTAINER_IMAGE_PATH}/${KAS_CONTAINER_IMAGE_NAME}:${KAS_IMAGE_VERSION}"
 	if [ -n "${KAS_CONTAINER_IMAGE_DISTRO}" ]; then
 		KAS_CONTAINER_IMAGE="${KAS_CONTAINER_IMAGE}-${KAS_CONTAINER_IMAGE_DISTRO}"
 	fi
@@ -320,21 +355,9 @@ setup_kas_dirs
 KAS_CONTAINER_ENGINE="${KAS_CONTAINER_ENGINE:-${KAS_DOCKER_ENGINE}}"
 if [ -z "${KAS_CONTAINER_ENGINE}" ]; then
 	# Try to auto-detect a container engine
-	if command -v docker >/dev/null; then
-		case $(docker -v 2>/dev/null) in
-		podman*)
-			# The docker command is an alias for podman
-			KAS_CONTAINER_ENGINE=podman
-			;;
-		Docker*)
-			# The docker command is the real docker
-			KAS_CONTAINER_ENGINE=docker
-			;;
-		*)
-			# The docker command is an unknown engine
-			fatal_error "docker command found, but unknown engine detected"
-		esac
-	elif command -v podman >/dev/null; then
+	if command -v docker >/dev/null 2>&1 && docker -v 2>/dev/null | grep -q '^Docker'; then
+		KAS_CONTAINER_ENGINE=docker
+	elif command -v podman >/dev/null 2>&1; then
 		KAS_CONTAINER_ENGINE=podman
 	else
 		fatal_error "no container engine found, need docker or podman"
@@ -361,8 +384,12 @@ esac
 # parse kas-container options
 while [ $# -gt 0 ]; do
 	case "$1" in
-	--isar)
+	--isar|--isar-privileged)
 		enable_isar_mode
+		shift 1
+		;;
+	--isar-rootless)
+		enable_isar_rootless_mode
 		shift 1
 		;;
 	--with-loop-dev)
@@ -578,8 +605,10 @@ else
 		sed 's/build_system:[ ]\+//')
 fi
 
-if [ "${BUILD_SYSTEM}" = "isar" ]; then
+if [ "${BUILD_SYSTEM}" = "isar" ] || [ "${BUILD_SYSTEM}" = "isar-privileged" ]; then
 	enable_isar_mode
+elif [ "${BUILD_SYSTEM}" = "isar-rootless" ]; then
+	enable_isar_rootless_mode
 elif [ -z "${ISAR_MODE}" ]; then
 	enable_oe_mode
 fi
@@ -776,6 +805,10 @@ while [ $KAS_EXTRA_BITBAKE_ARGS -gt 0 ]; do
 	set -- "$@" "$arg"
 	KAS_EXTRA_BITBAKE_ARGS=$((KAS_EXTRA_BITBAKE_ARGS - 1))
 done
+
+if [ "${ISAR_MODE}" = "1" ] && [ "${ISAR_ROOTLESS_MODE}" = "1" ]; then
+       fatal_error "only one of --isar and --isar-rootless can be selected."
+fi
 
 # shellcheck disable=SC2086
 trace ${KAS_CONTAINER_COMMAND} run "$@"
