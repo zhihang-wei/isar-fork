@@ -6,7 +6,7 @@ name: CI
 on: [push]
 
 env:
-  CONTAINER_BASENAME: ${{ vars.CONTAINER_BASENAME || 'ghcr.io/ilbers/isar' }}
+  CONTAINER_BASENAME: ${{ vars.CONTAINER_BASENAME || 'ghcr.io/zhihang-wei/isar-fork' }}
 
 jobs:
   container:

@@ -1,6 +1,6 @@
 ARG KAS_VERSION=0
 
-FROM ghcr.io/siemens/kas/kas-isar:${KAS_VERSION}
+FROM ghcr.io/zhihang-wei/kas-fork/kas-isar:${KAS_VERSION}
 
 ARG TARGETPLATFORM
 ARG DEBIAN_FRONTEND=noninteractive

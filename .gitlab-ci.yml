@@ -36,7 +36,7 @@ variables:
 
 
 .test-container: &test-container
-  image: ghcr.io/ilbers/isar/test-container:1
+  image: ghcr.io/zhihang-wei/isar-fork/test-container:1
 
 
 .use-default-image:
