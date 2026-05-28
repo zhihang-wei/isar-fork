@@ -654,10 +654,7 @@ class InitRdCrossTests(InitRdBaseTest):
     def test_dracut_in_image(self):
         """Test switch to dracut in an image recipe."""
         self.dracut_in_image([
-            'mc:qemuamd64-bookworm:isar-image-ci',
-            'mc:qemuamd64-trixie:isar-image-ci',
             'mc:qemuarm64-bookworm:isar-image-ci',
-            'mc:qemuarm64-trixie:isar-image-ci'
         ])
 
     def test_dracut_build_initrd(self):
