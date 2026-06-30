@@ -80,9 +80,9 @@ jobs:
       matrix:
         tests: [
           {name: 'test_dev',
-           spec: 'testsuite/citest.py:test_dev$ testsuite/citest.py:test_dev_run_arm_'},
+           spec: 'testsuite/citest.py:test_dev$ testsuite/citest.py:test_dev_run_arm_ -p rootless=1'},
           {name: 'test_dev_apps',
-           spec: 'testsuite/citest.py:test_dev_apps testsuite/citest.py:test_dev_rebuild testsuite/citest.py:test_dev_run_amd64_ testsuite/citest.py:test_dev_run_arm64_'}
+           spec: 'testsuite/citest.py:test_dev_apps testsuite/citest.py:test_dev_rebuild testsuite/citest.py:test_dev_run_amd64_ testsuite/citest.py:test_dev_run_arm64_ -p rootless=1'}
         ]
     steps:
       - name: Check out repo
